@@ -1,4 +1,4 @@
-import sys, os, vcf, uuid, json, subprocess
+import sys, os, vcf, uuid, json, subprocess, tarfile
 
 from collections import OrderedDict
 
@@ -24,86 +24,50 @@ CONST_TILEDB_FIELDS["GT"]              = { "vcf_field_class" : ["FORMAT"],      
 CONST_TILEDB_FIELDS["PS"]              = { "vcf_field_class" : ["FORMAT"],        "type":"int",   "length":1 }
 
 
-class VCF:
+def writeVIDMappingFile(reader, vid_map_file, fields_dict=CONST_TILEDB_FIELDS):
+    vid_mapping = OrderedDict()
+    vid_mapping["fields"] = fields_dict
+    vid_mapping["contigs"] = OrderedDict()
+    contigs = vid_mapping["contigs"]
+    offset = 0
+    # use vcf header to construct contigs
+    for reference in reader.contigs:
+      contigs[reference] = {"length": reader.contigs[reference].length,
+                                 "tiledb_column_offset": offset}
+      offset += (long(reader.contigs[reference].length) + 1000)
 
-  def __init__(self, filename, loader_config):
-    """
-    init uses reads in the vcf
-    """
-    self.filename = os.path.abspath(filename)
-
-    # config information
-    with open(loader_config) as conf:
-      config = json.load(conf)
-    
-    self.callset_map = config['callset_mapping_file']
-    self.vid_map = config.get('vid_mapping_file', None)
-    # assuming only one tiledb instance
-    self.workspace = config['column_partitions'][0]['workspace']
-    self.array = config['column_partitions'][0]['array'] 
-
-    # TileDB loader specific 
-    self.callset_mapping = dict()
-
-    # just read callsets from header by default
-    self.sampleTag = False
+    writeJSON2File(vid_mapping, vid_map_file)
 
 
-  def __enter__(self):
+def getCallSets(reader, filename, callset_check, sampleTag = False, row_counter=0):
 
-    self.file = open(self.filename, 'rb')
-    self.reader = vcf.Reader(self.file)
+  callsets = OrderedDict()
 
-    return self
+  for i in range(0, len(reader.samples)):
+    if sampleTag is False:
+      name = reader.samples[i]
+      idx_in_file = i
+    else:
+      name = reader.metadata['SAMPLE'][i]['SampleName']
+      idx_in_file = reader.samples.index(reader.metadata['SAMPLE'][i]['ID'])
 
-  def __exit__(self, exc_type, exc_value, traceback):
-    self.file.close()
+    # check duplicate
+    if name in callset_check:
+      nuuid = str(uuid.uuid4())
+      sys.stderr.write('Duplicate callset name '+name+' : appending _'+nuuid+'\n');
+      name += ('_'+nuuid)
 
+    callsets[name] = OrderedDict()
+    callsets[name]['row_idx'] = row_counter
+    callsets[name]['idx_in_file'] = idx_in_file
+    callsets[name]['filename'] = filename 
+    print callsets[name]
+    print 'callset', name, 'with', str(row_counter)
 
-  def writeVIDMappingFile(self, fields_dict=CONST_TILEDB_FIELDS):
-      vid_mapping = OrderedDict()
-      vid_mapping["fields"] = fields_dict
-      vid_mapping["contigs"] = OrderedDict()
-      contigs = vid_mapping["contigs"]
-      offset = 0
-      # use vcf header to construct contigs
-      for reference in self.reader.contigs:
-        contigs[reference] = {"length": self.reader.contigs[reference].length,
-                                   "tiledb_column_offset": offset}
-        offset += (long(self.reader.contigs[reference].length) + 1000)
-
-      writeJSON2File(vid_mapping, self.vid_map)
-
-
-  def getCallSets(self, callset_check, row_counter=0):
-
-    callsets = OrderedDict()
-
-    for i in range(0, len(self.reader.samples)):
-      if self.sampleTag is False:
-        name = self.reader.samples[i]
-        idx_in_file = i
-      else:
-        name = self.reader.metadata['SAMPLE'][i]['SampleName']
-        idx_in_file = self.reader.samples.index(self.reader.metadata['SAMPLE'][i]['ID'])
-
-      # check duplicate
-      if name in callset_check:
-        nuuid = str(uuid.uuid4())
-        sys.stderr.write('Duplicate callset name '+name+' : appending _'+nuuid+'\n');
-        name += ('_'+nuuid)
-
-      callsets[name] = OrderedDict()
-      callsets[name]['row_idx'] = row_counter
-      callsets[name]['idx_in_file'] = idx_in_file
-      callsets[name]['filename'] = self.filename 
-      print callsets[name]
-      print 'callset', name, 'with', str(row_counter)
-
-      row_counter += 1
+    row_counter += 1
 
 
-    return callsets, row_counter
+  return callsets, row_counter
 
 
 def writeJSON2File(input_json, output_file):
@@ -119,33 +83,64 @@ if __name__ == "__main__":
   # workspace, array
   parser.add_argument("-l", "--loader", required=True, type=str,
                       help="base loader file")
-  parser.add_argument("-i", "--inputs", nargs='+', type=str, required=True, help="VCF files to be imported.")
+  parser.add_argument("-i", "--input", type=str, required=True, help="VCF file to be imported.")
   parser.add_argument("-s", "--sampleTag", action="store_true", required=False, help="Use SAMPLE tag in VCF header to name callsets.")
   parser.add_argument("-L", "--load", action="store_true", required=False, help="Run vcf2tiledb after creating necessary configs.")
   parser.add_argument("-t", "--tar", action="store_true", required=False, help="Extract tar.")  
   args = parser.parse_args()
 
-  callset_mapping = {}
-  callset_mapping['callsets'] = OrderedDict()
-  callsets = callset_mapping['callsets']
 
-  counter = 0
-  rc = 0
-  for input_file in args.inputs:
-    
-    with VCF(input_file, args.loader) as vc:
-      vc.sampleTag = args.sampleTag
-      # write vid mapping file for the first
-      # ideally one array should have one vid array associated with it
-      if counter == 0:
-        vc.writeVIDMappingFile()
-        callset_map_file = vc.callset_map
+  # check if the file is a tarball
+  # this is specific to the VC use case
+  # data prep
+  inputs = []
+  if args.tar:
+    tar = tarfile.open(args.input, 'r')
+    for member in tar.getmembers():
+      if member.name[-6:] == 'vcf.gz':
+        inputs.append(tar.extractfile(member.name))
 
-      new_callset, rc = vc.getCallSets(callsets, row_counter=rc)
-      callsets.update(new_callset)
-      counter += 1
+  else:
+    inputs.append(open(args.input, 'rb'))
+  
+  with open(args.loader) as conf:
+    config = json.load(conf)
+
+  callset_map_file = config['callset_mapping_file']
+  vid_map_file = config['vid_mapping_file']
+
+  # if there are callsets in the array
+  if os.path.isfile(callset_map_file):
+    nuuid = str(uuid.uuid4())
+    with open(callset_map_file) as callset_file:
+      callset_mapping = json.load(callset_file)
+      callsets = callset_mapping['callsets']
+      # set new loading position
+      last = callsets[max(callsets, key=lambda v:callsets[v]['row_idx'])]['row_idx'] + 1
+  # else, make the file and start fresh
+  else:
+    callset_mapping = {}
+    callset_mapping['callsets'] = {}
+    callsets = callset_mapping['callsets']
+
+
+  # update callsets, write vid if new
+  rc = config.get('lb_callset_row_idx', 0)
+  for input_file in inputs:
+
+    r = vcf.Reader(input_file)
+    # set schema from the first vcf that is imported
+    # if this file exists, then it won't be wrote
+    if not os.path.isfile(vid_map_file):
+      writeVIDMappingFile(r, vid_map_file)
+
+    new_callset, rc = getCallSets(r, input_file.name, callsets, sampleTag=args.sampleTag, row_counter=rc)
+    callsets.update(new_callset)
+
       
   writeJSON2File(callset_mapping, callset_map_file)
+  config['lb_callset_row_idx'] = rc
+  writeJSON2File(config, args.loader)
 	
   if args.load:
   	processArgs = ['vcf2tiledb', os.path.abspath(args.loader)]
@@ -156,4 +151,5 @@ if __name__ == "__main__":
   	if pipe.returncode != 0:
     		raise Exception("subprocess run: {0}\nFailed with stdout: \n-- \n{1} \n--\nstderr: \n--\n{2} \n--".format(" ".join(processArgs), output, error))
 
-
+  for inp in inputs:
+    inp.close()
