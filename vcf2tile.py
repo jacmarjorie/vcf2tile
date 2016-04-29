@@ -2,8 +2,8 @@ import sys, os, vcf, uuid, json, subprocess
 
 from collections import OrderedDict
 
-# defaults for fields list
 CONST_TILEDB_FIELDS = OrderedDict()
+CONST_TILEDB_FIELDS["END"]             = { "vcf_field_class" : ["INFO"],          "type": "int" }
 CONST_TILEDB_FIELDS["BaseQRankSum"]    = { "vcf_field_class" : ["INFO"],          "type":"float" }
 CONST_TILEDB_FIELDS["ClippingRankSum"] = { "vcf_field_class" : ["INFO"],          "type":"float" }
 CONST_TILEDB_FIELDS["MQRankSum"]       = { "vcf_field_class" : ["INFO"],          "type":"float" }
@@ -69,18 +69,18 @@ class VCF:
       for reference in self.reader.contigs:
         contigs[reference] = {"length": self.reader.contigs[reference].length,
                                    "tiledb_column_offset": offset}
-        offset += long(1.1*int(self.reader.contigs[reference].length)) + 1
+        offset += (long(self.reader.contigs[reference].length) + 1000)
 
       writeJSON2File(vid_mapping, self.vid_map)
 
 
   def getCallSets(self, callset_check, row_counter=0):
 
-    callsets = dict()
+    callsets = OrderedDict()
 
     for i in range(0, len(self.reader.samples)):
       if self.sampleTag is False:
-        name = self.reader.sample[i]
+        name = self.reader.samples[i]
         idx_in_file = i
       else:
         name = self.reader.metadata['SAMPLE'][i]['SampleName']
@@ -92,8 +92,15 @@ class VCF:
         sys.stderr.write('Duplicate callset name '+name+' : appending _'+nuuid+'\n');
         name += ('_'+nuuid)
 
-      callsets[name] = {'row_idx': row_counter, 'idx_in_file': idx_in_file, 'filename': self.filename} 
+      callsets[name] = OrderedDict()
+      callsets[name]['row_idx'] = row_counter
+      callsets[name]['idx_in_file'] = idx_in_file
+      callsets[name]['filename'] = self.filename 
+      print callsets[name]
+      print 'callset', name, 'with', str(row_counter)
+
       row_counter += 1
+
 
     return callsets, row_counter
 
@@ -116,8 +123,8 @@ if __name__ == "__main__":
   
   args = parser.parse_args()
 
-  callset_mapping = dict()
-  callset_mapping['callsets'] = dict()
+  callset_mapping = {}
+  callset_mapping['callsets'] = OrderedDict()
   callsets = callset_mapping['callsets']
 
   counter = 0
