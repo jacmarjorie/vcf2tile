@@ -2,11 +2,6 @@ import sys, os, vcf, uuid, json, subprocess
 
 from collections import OrderedDict
 
-# DEFINE EXECUTABLE LOCATIONS
-vtexe = '/mnt/app_hdd/TileDB/GenomicsDB/bin/'
-
-# set gcc on sparkdmz
-os.system('source /opt/gcc-4.9.1/setup.sh')
 
 CONST_TILEDB_FIELDS = OrderedDict()
 CONST_TILEDB_FIELDS["END"]             = { "vcf_field_class" : ["INFO"],          "type": "int" }
@@ -153,7 +148,7 @@ if __name__ == "__main__":
   writeJSON2File(callset_mapping, callset_map_file)
 	
   if args.load:
-  	processArgs = [vtexe+'vcf2tiledb', os.path.abspath(args.loader)]
+  	processArgs = ['vcf2tiledb', os.path.abspath(args.loader)]
  	# load the files
   	pipe = subprocess.Popen(processArgs, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
   	output, error = pipe.communicate()
