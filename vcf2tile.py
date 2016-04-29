@@ -2,6 +2,12 @@ import sys, os, vcf, uuid, json, subprocess
 
 from collections import OrderedDict
 
+# DEFINE EXECUTABLE LOCATIONS
+vtexe = '/mnt/app_hdd/TileDB/GenomicsDB/bin/'
+
+# set gcc on sparkdmz
+os.system('source /opt/gcc-4.9.1/setup.sh')
+
 CONST_TILEDB_FIELDS = OrderedDict()
 CONST_TILEDB_FIELDS["END"]             = { "vcf_field_class" : ["INFO"],          "type": "int" }
 CONST_TILEDB_FIELDS["BaseQRankSum"]    = { "vcf_field_class" : ["INFO"],          "type":"float" }
@@ -120,7 +126,8 @@ if __name__ == "__main__":
                       help="base loader file")
   parser.add_argument("-i", "--inputs", nargs='+', type=str, required=True, help="VCF files to be imported.")
   parser.add_argument("-s", "--sampleTag", action="store_true", required=False, help="Use SAMPLE tag in VCF header to name callsets.")
-  
+  parser.add_argument("-L", "--load", action="store_true", required=False, help="Run vcf2tiledb after creating necessary configs.")
+  parser.add_argument("-t", "--tar", action="store_true", required=False, help="Extract tar.")  
   args = parser.parse_args()
 
   callset_mapping = {}
@@ -130,7 +137,7 @@ if __name__ == "__main__":
   counter = 0
   rc = 0
   for input_file in args.inputs:
-
+    
     with VCF(input_file, args.loader) as vc:
       vc.sampleTag = args.sampleTag
       # write vid mapping file for the first
@@ -144,13 +151,14 @@ if __name__ == "__main__":
       counter += 1
       
   writeJSON2File(callset_mapping, callset_map_file)
+	
+  if args.load:
+  	processArgs = [vtexe+'vcf2tiledb', os.path.abspath(args.loader)]
+ 	# load the files
+  	pipe = subprocess.Popen(processArgs, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+  	output, error = pipe.communicate()
 
-  processArgs = ['vcf2tiledb', os.path.abspath(args.loader)]
-  # load the files
-  pipe = subprocess.Popen(processArgs, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-  output, error = pipe.communicate()
-
-  if pipe.returncode != 0:
-    raise Exception("subprocess run: {0}\nFailed with stdout: \n-- \n{1} \n--\nstderr: \n--\n{2} \n--".format(" ".join(processArgs), output, error))
+  	if pipe.returncode != 0:
+    		raise Exception("subprocess run: {0}\nFailed with stdout: \n-- \n{1} \n--\nstderr: \n--\n{2} \n--".format(" ".join(processArgs), output, error))
 
 
