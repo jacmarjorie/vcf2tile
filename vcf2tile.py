@@ -83,7 +83,7 @@ if __name__ == "__main__":
 	# workspace, array
 	parser.add_argument("-l", "--loader", required=True, type=str,
 											help="base loader file")
-	parser.add_argument("-i", "--input", type=str, required=True, help="VCF file to be imported.")
+	parser.add_argument("-i", "--inputs", nargs='+', type=str, required=True, help="VCF file to be imported.")
 	parser.add_argument("-s", "--sampleTag", action="store_true", required=False, help="Use SAMPLE tag in VCF header to name callsets.")
 	parser.add_argument("-L", "--load", action="store_true", required=False, help="Run vcf2tiledb after creating necessary configs.")
 	parser.add_argument("-t", "--tar", action="store_true", required=False, help="Extract tar.")  
@@ -96,17 +96,18 @@ if __name__ == "__main__":
 	inputs = []
 	tmpdir = '/tmp/vcf2tile'+str(uuid.uuid4())
 	if args.tar:
-		tar = tarfile.open(args.input, 'r')
-		for member in tar.getmembers():
-			if 'vcf.gz' in member.name:
-				try:
-					tar.extract(member.name, tmpdir)
-				except Exception as e:
-					raise 'Issue extracting VCF {0}'.format(e)
+		for input_tar in args.inputs:
+			tar = tarfile.open(input_tar, 'r')
+			for member in tar.getmembers():
+				if 'vcf.gz' in member.name:
+					try:
+						tar.extract(member.name, tmpdir)
+					except Exception as e:
+						raise 'Issue extracting VCF {0}'.format(e)
 
-				# if it's not the index
-				if member.name[-6:] == 'vcf.gz': 
-					inputs.append(tmpdir+"/"+member.name)
+					# if it's not the index
+					if member.name[-6:] == 'vcf.gz': 
+						inputs.append(tmpdir+"/"+member.name)
 
 	else:
 		inputs = [os.path.abspath(x) for x in args.inputs]
@@ -157,7 +158,6 @@ if __name__ == "__main__":
 				# if this file exists, we won't create a new array either
 				if not os.path.isfile(vid_map_file):
 					writeVIDMappingFile(r, vid_map_file)
-					config['delete_and_create_tiledb_array'] = False
 
 				new_callset, rc = getCallSets(r, sorted_file, callsets, sampleTag=args.sampleTag, row_counter=rc)
 				callsets.update(new_callset)
@@ -170,7 +170,6 @@ if __name__ == "__main__":
 			raise Exception("subprocess run: bcftools norm\nFailed with stdout: \n-- \n{0} \n--\nstderr: \n--\n{1} \n--".format(" ".join(output, error)))
 
 	writeJSON2File(callset_mapping, callset_map_file)
-	config['lb_callset_row_idx'] = rc
 	writeJSON2File(config, args.loader)
 	
 	if args.load:
@@ -192,6 +191,10 @@ if __name__ == "__main__":
 				os.remove(callset_map_file)
 
 			raise Exception("subprocess run: {0}\nFailed with stdout: \n-- \n{1} \n--\nstderr: \n--\n{2} \n--".format(" ".join(processArgs), output, error))
+
+		config['lb_callset_row_idx'] = rc
+		config['delete_and_create_tiledb_array'] = False
+		writeJSON2File(config, args.loader)
 
 	# remove the tmp directory
 	shutil.rmtree(tmpdir, ignore_errors=True)
