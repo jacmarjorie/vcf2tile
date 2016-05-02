@@ -1,4 +1,4 @@
-import sys, os, vcf, uuid, json, subprocess, tarfile
+import sys, os, vcf, uuid, json, subprocess, tarfile, shutil
 
 from collections import OrderedDict
 
@@ -25,131 +25,173 @@ CONST_TILEDB_FIELDS["PS"]              = { "vcf_field_class" : ["FORMAT"],      
 
 
 def writeVIDMappingFile(reader, vid_map_file, fields_dict=CONST_TILEDB_FIELDS):
-    vid_mapping = OrderedDict()
-    vid_mapping["fields"] = fields_dict
-    vid_mapping["contigs"] = OrderedDict()
-    contigs = vid_mapping["contigs"]
-    offset = 0
-    # use vcf header to construct contigs
-    for reference in reader.contigs:
-      contigs[reference] = {"length": reader.contigs[reference].length,
-                                 "tiledb_column_offset": offset}
-      offset += (long(reader.contigs[reference].length) + 1000)
+		vid_mapping = OrderedDict()
+		vid_mapping["fields"] = fields_dict
+		vid_mapping["contigs"] = OrderedDict()
+		contigs = vid_mapping["contigs"]
+		offset = 0
+		# use vcf header to construct contigs
+		for reference in reader.contigs:
+			contigs[reference] = {"length": reader.contigs[reference].length,
+																 "tiledb_column_offset": offset}
+			offset += (long(reader.contigs[reference].length) + 1000)
 
-    writeJSON2File(vid_mapping, vid_map_file)
+		writeJSON2File(vid_mapping, vid_map_file)
 
 
 def getCallSets(reader, filename, callset_check, sampleTag = False, row_counter=0):
 
-  callsets = OrderedDict()
+	callsets = OrderedDict()
 
-  for i in range(0, len(reader.samples)):
-    if sampleTag is False:
-      name = reader.samples[i]
-      idx_in_file = i
-    else:
-      name = reader.metadata['SAMPLE'][i]['SampleName']
-      idx_in_file = reader.samples.index(reader.metadata['SAMPLE'][i]['ID'])
+	for i in range(0, len(reader.samples)):
+		if sampleTag is False:
+			name = reader.samples[i]
+			idx_in_file = i
+		else:
+			name = reader.metadata['SAMPLE'][i]['SampleName']
+			idx_in_file = reader.samples.index(reader.metadata['SAMPLE'][i]['ID'])
 
-    # check duplicate
-    if name in callset_check:
-      nuuid = str(uuid.uuid4())
-      sys.stderr.write('Duplicate callset name '+name+' : appending _'+nuuid+'\n');
-      name += ('_'+nuuid)
+		# check duplicate
+		if name in callset_check:
+			nuuid = str(uuid.uuid4())
+			sys.stderr.write('Duplicate callset name '+name+' : appending _'+nuuid+'\n');
+			name += ('_'+nuuid)
 
-    callsets[name] = OrderedDict()
-    callsets[name]['row_idx'] = row_counter
-    callsets[name]['idx_in_file'] = idx_in_file
-    callsets[name]['filename'] = filename 
-    print callsets[name]
-    print 'callset', name, 'with', str(row_counter)
+		callsets[name] = OrderedDict()
+		callsets[name]['row_idx'] = row_counter
+		callsets[name]['idx_in_file'] = idx_in_file
+		callsets[name]['filename'] = filename 
 
-    row_counter += 1
+		print 'Writing callset ', name, 'at row ', str(row_counter)
+
+		row_counter += 1
 
 
-  return callsets, row_counter
+	return callsets, row_counter
 
 
 def writeJSON2File(input_json, output_file):
-  with open(output_file, "w") as outFP:
-    json.dump(input_json, outFP, indent=2, separators=(',', ': '))
+	with open(output_file, "w") as outFP:
+		json.dump(input_json, outFP, indent=2, separators=(',', ': '))
 
 
 if __name__ == "__main__":
-  import argparse 
-  parser = argparse.ArgumentParser(description = "Load a list of VCFs into TileDB.")
+	import argparse 
+	parser = argparse.ArgumentParser(description = "Load a list of VCFs into TileDB.")
 
-  # includes path to vid_map and callset_map
-  # workspace, array
-  parser.add_argument("-l", "--loader", required=True, type=str,
-                      help="base loader file")
-  parser.add_argument("-i", "--input", type=str, required=True, help="VCF file to be imported.")
-  parser.add_argument("-s", "--sampleTag", action="store_true", required=False, help="Use SAMPLE tag in VCF header to name callsets.")
-  parser.add_argument("-L", "--load", action="store_true", required=False, help="Run vcf2tiledb after creating necessary configs.")
-  parser.add_argument("-t", "--tar", action="store_true", required=False, help="Extract tar.")  
-  args = parser.parse_args()
-
-
-  # check if the file is a tarball
-  # this is specific to the VC use case
-  # data prep
-  inputs = []
-  if args.tar:
-    tar = tarfile.open(args.input, 'r')
-    for member in tar.getmembers():
-      if member.name[-6:] == 'vcf.gz':
-        inputs.append(tar.extractfile(member.name))
-
-  else:
-    inputs.append(open(args.input, 'rb'))
-  
-  with open(args.loader) as conf:
-    config = json.load(conf)
-
-  callset_map_file = config['callset_mapping_file']
-  vid_map_file = config['vid_mapping_file']
-
-  # if there are callsets in the array
-  if os.path.isfile(callset_map_file):
-    nuuid = str(uuid.uuid4())
-    with open(callset_map_file) as callset_file:
-      callset_mapping = json.load(callset_file)
-      callsets = callset_mapping['callsets']
-      # set new loading position
-      last = callsets[max(callsets, key=lambda v:callsets[v]['row_idx'])]['row_idx'] + 1
-  # else, make the file and start fresh
-  else:
-    callset_mapping = {}
-    callset_mapping['callsets'] = {}
-    callsets = callset_mapping['callsets']
+	# includes path to vid_map and callset_map
+	# workspace, array
+	parser.add_argument("-l", "--loader", required=True, type=str,
+											help="base loader file")
+	parser.add_argument("-i", "--input", type=str, required=True, help="VCF file to be imported.")
+	parser.add_argument("-s", "--sampleTag", action="store_true", required=False, help="Use SAMPLE tag in VCF header to name callsets.")
+	parser.add_argument("-L", "--load", action="store_true", required=False, help="Run vcf2tiledb after creating necessary configs.")
+	parser.add_argument("-t", "--tar", action="store_true", required=False, help="Extract tar.")  
+	args = parser.parse_args()
 
 
-  # update callsets, write vid if new
-  rc = config.get('lb_callset_row_idx', 0)
-  for input_file in inputs:
+	# check if the file is a tarball
+	# this is specific to the VC use case
+	# data prep
+	inputs = []
+	tmpdir = '/tmp/vcf2tile'+str(uuid.uuid4())
+	if args.tar:
+		tar = tarfile.open(args.input, 'r')
+		for member in tar.getmembers():
+			if 'vcf.gz' in member.name:
+				try:
+					tar.extract(member.name, tmpdir)
+				except Exception as e:
+					raise 'Issue extracting VCF {0}'.format(e)
 
-    r = vcf.Reader(input_file)
-    # set schema from the first vcf that is imported
-    # if this file exists, then it won't be wrote
-    if not os.path.isfile(vid_map_file):
-      writeVIDMappingFile(r, vid_map_file)
+				# if it's not the index
+				if member.name[-6:] == 'vcf.gz': 
+					inputs.append(tmpdir+"/"+member.name)
 
-    new_callset, rc = getCallSets(r, input_file.name, callsets, sampleTag=args.sampleTag, row_counter=rc)
-    callsets.update(new_callset)
-
-      
-  writeJSON2File(callset_mapping, callset_map_file)
-  config['lb_callset_row_idx'] = rc
-  writeJSON2File(config, args.loader)
+	else:
+		inputs = [os.path.abspath(x) for x in args.inputs]
 	
-  if args.load:
-  	processArgs = ['vcf2tiledb', os.path.abspath(args.loader)]
- 	# load the files
-  	pipe = subprocess.Popen(processArgs, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-  	output, error = pipe.communicate()
+	with open(args.loader) as conf:
+		config = json.load(conf)
+		backupconfig = dict(config)
 
-  	if pipe.returncode != 0:
-    		raise Exception("subprocess run: {0}\nFailed with stdout: \n-- \n{1} \n--\nstderr: \n--\n{2} \n--".format(" ".join(processArgs), output, error))
+	callset_map_file = config['callset_mapping_file']
+	vid_map_file = config['vid_mapping_file']
 
-  for inp in inputs:
-    inp.close()
+	# if there are callsets in the array
+	write_new_callsets = False
+	if os.path.isfile(callset_map_file):
+		nuuid = str(uuid.uuid4())
+		with open(callset_map_file) as callset_file:
+			callset_mapping = json.load(callset_file)
+			backupcallset_mapping = dict(callset_mapping)
+			callsets = callset_mapping['callsets']
+			# set new loading position
+			last = callsets[max(callsets, key=lambda v:callsets[v]['row_idx'])]['row_idx'] + 1
+			write_new_callsets = True
+	# else, make the file and start fresh
+	else:
+		callset_mapping = {}
+		callset_mapping['callsets'] = {}
+		callsets = callset_mapping['callsets']
+
+
+	# update callsets, write vid if new
+	rc = config.get('lb_callset_row_idx', 0)
+	for input_file in inputs:
+
+		# validate sorted
+		sorted_file = input_file[:-6]+'sorted.vcf.gz'
+		bcfpipe1 = subprocess.Popen(['bcftools','norm', '-m', '+any', '-O', 'z', '-o', sorted_file, input_file], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+		output, error = bcfpipe1.communicate()
+		if bcfpipe1.returncode == 0:
+
+			bcfpipe2 = subprocess.Popen(['bcftools', 'index', '-f', '-t', sorted_file], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+			output, error = bcfpipe2.communicate()
+			if bcfpipe2.returncode == 0:
+
+				f = open(sorted_file, 'rb')
+				r = vcf.Reader(f)
+				# set schema from the first vcf that is imported
+				# if this file exists, then it won't be wrote
+				# if this file exists, we won't create a new array either
+				if not os.path.isfile(vid_map_file):
+					writeVIDMappingFile(r, vid_map_file)
+					config['delete_and_create_tiledb_array'] = False
+
+				new_callset, rc = getCallSets(r, sorted_file, callsets, sampleTag=args.sampleTag, row_counter=rc)
+				callsets.update(new_callset)
+
+				f.close()
+
+			else:
+				raise Exception("subprocess run: bcftools index\nFailed with stdout: \n-- \n{0} \n--\nstderr: \n--\n{1} \n--".format(" ".join(output, error)))
+		else:
+			raise Exception("subprocess run: bcftools norm\nFailed with stdout: \n-- \n{0} \n--\nstderr: \n--\n{1} \n--".format(" ".join(output, error)))
+
+	writeJSON2File(callset_mapping, callset_map_file)
+	config['lb_callset_row_idx'] = rc
+	writeJSON2File(config, args.loader)
+	
+	if args.load:
+		processArgs = ['vcf2tiledb', os.path.abspath(args.loader)]
+	# load the files
+		pipe = subprocess.Popen(processArgs, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+		output, error = pipe.communicate()
+
+		if pipe.returncode != 0:
+			print 'Failed loading, reverting config files.'
+			# set loaders back
+			writeJSON2File(backupconfig, args.loader)
+			# if callsets were appended, write the old list back
+			if write_new_callsets:
+				writeJSON2File(backupcallset_mapping, callset_map_file)
+			# if no callsets, then remove the init vid
+			else:
+				os.remove(vid_map_file)
+				os.remove(callset_map_file)
+
+			raise Exception("subprocess run: {0}\nFailed with stdout: \n-- \n{1} \n--\nstderr: \n--\n{2} \n--".format(" ".join(processArgs), output, error))
+
+	# remove the tmp directory
+	shutil.rmtree(tmpdir, ignore_errors=True)
