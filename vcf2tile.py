@@ -175,11 +175,10 @@ if __name__ == "__main__":
 	if args.load:
 		processArgs = ['vcf2tiledb', os.path.abspath(args.loader)]
 	# load the files
-		pipe = subprocess.Popen(processArgs, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+		pipe = subprocess.Popen(' '.join(processArgs), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 		output, error = pipe.communicate()
 
 		if pipe.returncode != 0:
-			print 'Failed loading, reverting config files.'
 			# set loaders back
 			writeJSON2File(backupconfig, args.loader)
 			# if callsets were appended, write the old list back
